@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>Arena Brawl – Multiplayer Combat</title>
+<style>
+html, body {
+  margin: 0; padding: 0; background: #0b0f1a; overflow: hidden;
+  touch-action: none; font-family: system-ui, sans-serif;
+}
+#ui {
+  position: fixed; top: 10px; left: 50%; transform: translateX(-50%);
+  color: white; z-index: 10; background: rgba(0,0,0,0.5);
+  padding: 6px 12px; border-radius: 12px;
+}
+#skinPanel {
+  position: fixed; top: 60px; left: 50%; transform: translateX(-50%);
+  display: flex; gap: 10px; z-index: 10;
+}
+.skinBtn {
+  width: 36px; height: 36px; border-radius: 50%;
+  border: 2px solid white; cursor: pointer;
+}
+canvas { display: block; }
+.joystick {
+  position: fixed; bottom: 20px; left: 20px; width: 120px; height: 120px;
+  border-radius: 50%; background: rgba(255,255,255,0.08);
+}
+.stick {
+  position: absolute; left: 40px; top: 40px; width: 40px; height: 40px;
+  border-radius: 50%; background: rgba(255,255,255,0.6);
+}
+#attackBtn {
+  position: fixed; bottom: 40px; right: 30px; width: 90px; height: 90px;
+  border-radius: 50%; background: crimson; color: white; font-size: 18px; border: none;
+}
+#switchBtn {
+  position: fixed; bottom: 150px; right: 40px; width: 70px; height: 70px;
+  border-radius: 50%; background: #4adeff; color: black; font-size: 14px; border: none;
+}
+</style>
+</head>
+<body>
+<div id="ui">Arena Brawl – Multiplayer Combat</div>
+<div id="skinPanel"></div>
+<canvas id="game"></canvas>
+<div class="joystick" id="joy"><div class="stick" id="stick"></div></div>
+<button id="attackBtn">ATTACK</button>
+<button id="switchBtn">SWITCH</button>
+
+<script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
+<script>
+// ===== PeerJS Setup =====
+const room = prompt('Enter room name:', 'arena');
+const playerName = prompt('Enter your name:', 'Player');
+const playerId = crypto.randomUUID();
+let players = {};
+
+const peer = new Peer(playerId);
+let conn = null;
+peer.on('open', id => {
+  if(room !== id){
+    conn = peer.connect(room);
+    conn.on('open', () => {
+      conn.on('data', data => { players = data; });
+      sendPlayer();
+    });
+  }
+});
+peer.on('connection', connection => {
+  connection.on('data', data => {
+    players = data;
+    connection.send(players);
+  });
+});
+function sendPlayer(){ if(conn && conn.open) conn.send(players); }
+
+// ===== Canvas =====
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+function resize(){ canvas.width = innerWidth; canvas.height = innerHeight; }
+window.addEventListener('resize', resize); resize();
+
+// ===== World =====
+const WORLD_SIZE = 2000;
+const walls=[]; for(let i=0;i<35;i++) walls.push({x:Math.random()*1600-800,y:Math.random()*1600-800,w:120,h:40});
+function collideRect(px,py,r,w){ return px+r>w.x && px-r<w.x+w.w && py+r>w.y && py-r<w.y+w.h; }
+
+// ===== Skins =====
+const skins = [
+  { name:'Neon', draw:(p)=>{ glowCircle(p,'#4adeff','#0ff'); } },
+  { name:'Fire', draw:(p)=>{ glowCircle(p,'#ff4a4a','#f00'); } },
+  { name:'Void', draw:(p)=>{ glowCircle(p,'#a855f7','#8000ff'); } },
+  { name:'Nature', draw:(p)=>{ glowCircle(p,'#22c55e','#00ff66'); } }
+];
+function glowCircle(p,fill,glow){ ctx.shadowBlur=15; ctx.shadowColor=glow; ctx.fillStyle=fill; ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,Math.PI*2); ctx.fill(); ctx.shadowBlur=0; }
+const skinPanel = document.getElementById('skinPanel');
+skins.forEach((s,i)=>{ const b=document.createElement('div'); b.className='skinBtn'; b.style.background='#222'; b.onclick=()=>player.skin=i; skinPanel.appendChild(b); });
+
+// ===== Player =====
+let player = { x:0,y:0,r:16,hp:100,weapon:'sword',skin:0,id:playerId,name:playerName };
+players[playerId] = player;
+
+// ===== Weapons =====
+const weapons={ sword:{range:40,dmg:25,cooldown:400}, blaster:{speed:8,dmg:15,cooldown:500} };
+let lastAttack=0, bullets=[];
+
+// ===== Input =====
+let moveX=0, moveY=0;
+const joy=document.getElementById('joy'); const stick=document.getElementById('stick');
+let joyActive=false,joyCenter={x:0,y:0};
+joy.addEventListener('touchstart',e=>{joyActive=true;const t=e.touches[0];joyCenter={x:t.clientX,y:t.clientY};});
+joy.addEventListener('touchmove',e=>{if(!joyActive)return;const t=e.touches[0];let dx=t.clientX-joyCenter.x;let dy=t.clientY-joyCenter.y;const m=40,d=Math.hypot(dx,dy);if(d>m){dx*=m/d;dy*=m/d;}stick.style.transform=`translate(${dx}px,${dy}px)`;moveX=dx/m;moveY=dy/m;});
+joy.addEventListener('touchend',()=>{joyActive=false;stick.style.transform='translate(0,0)';moveX=moveY=0;});
+switchBtn.onclick=()=>player.weapon=player.weapon==='sword'?'blaster':'sword';
+attackBtn.onclick=attackPlayer;
+
+// ===== Combat =====
+function attackPlayer(){
+  const w = weapons[player.weapon];
+  if(Date.now()-lastAttack<w.cooldown) return;
+  lastAttack=Date.now();
+  for(const id in players){
+    if(id===playerId) continue;
+    const p = players[id];
+    const dx = p.x-player.x, dy = p.y-player.y;
+    const dist = Math.hypot(dx,dy);
+    if(dist < w.range){ p.hp -= w.dmg; if(p.hp<0)p.hp=0; }
+  }
+}
+
+// ===== Game Loop =====
+function update(){
+  let nx=player.x+moveX*3, ny=player.y+moveY*3;
+  walls.forEach(w=>{ if(collideRect(nx,ny,player.r,w)){ nx=player.x; ny=player.y; }});
+  player.x=nx; player.y=ny;
+  players[playerId] = player;
+  sendPlayer();
+}
+function draw(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.save(); ctx.translate(canvas.width/2-player.x,canvas.height/2-player.y);
+  ctx.fillStyle='#182040'; ctx.fillRect(-WORLD_SIZE/2,-WORLD_SIZE/2,WORLD_SIZE,WORLD_SIZE);
+  ctx.fillStyle='#444'; walls.forEach(w=>ctx.fillRect(w.x,w.y,w.w,w.h));
+  for(const id in players){
+    const p=players[id];
+    skins[p.skin]?.draw(p);
+    ctx.fillStyle='red'; ctx.fillRect(p.x-16,p.y-30,32*(p.hp/100),5);
+    ctx.fillStyle='white'; ctx.font='14px sans-serif'; ctx.fillText(p.name||'Player',p.x-ctx.measureText(p.name||'Player').width/2,p.y-20);
+  }
+  ctx.restore(); ctx.fillStyle='white'; ctx.fillText('Weapon: '+player.weapon,20,30);
+}
+(function loop(){ update(); draw(); requestAnimationFrame(loop); })();
+</script>
+</body>
+</html>
